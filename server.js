@@ -21,11 +21,7 @@ app.use(
   cors({
     origin(origin, callback) {
       if (!origin) return callback(null, true);
-
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
+      if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error(`CORS not allowed: ${origin}`));
     },
     methods: ["GET", "POST"],
@@ -37,7 +33,7 @@ app.use(express.json({ limit: "1mb" }));
 
 function normalizeDateToSlash(dateStr) {
   if (!dateStr || dateStr === "未設定") return "未設定";
-  return dateStr.replace(/-/g, "/");
+  return String(dateStr).replace(/-/g, "/");
 }
 
 function normalizeTimeRange(startTime, endTime) {
@@ -48,6 +44,18 @@ function normalizeTimeRange(startTime, endTime) {
   if (!invalidStart && !invalidEnd) return `${startTime}〜${endTime}`;
   if (!invalidStart) return `${startTime}〜未設定`;
   return "未設定";
+}
+
+function normalizeSchedule(item, rawText) {
+  return {
+    title: item?.title || "予定",
+    date: normalizeDateToSlash(item?.date || "未設定"),
+    time: normalizeTimeRange(item?.startTime, item?.endTime),
+    location: item?.location || "未設定",
+    type: item?.type || "予定",
+    reason: item?.reason || "",
+    rawText,
+  };
 }
 
 app.get("/", (_req, res) => {
@@ -76,16 +84,23 @@ app.post("/api/parse-schedule", async (req, res) => {
 
 返すJSONの形式:
 {
-  "title": "予定名",
-  "date": "YYYY-MM-DD または 未設定",
-  "startTime": "HH:MM または 未設定",
-  "endTime": "HH:MM または 未設定",
-  "location": "場所 または 未設定",
-  "type": "面接|シフト|授業|予定",
-  "reason": "50文字以内の簡単な補足"
+  "schedules": [
+    {
+      "title": "予定名",
+      "date": "YYYY-MM-DD または 未設定",
+      "startTime": "HH:MM または 未設定",
+      "endTime": "HH:MM または 未設定",
+      "location": "場所 または 未設定",
+      "type": "面接|シフト|授業|予定",
+      "reason": "50文字以内の簡単な補足"
+    }
+  ]
 }
 
 ルール:
+- 予定が複数あれば、すべて schedules 配列に入れる
+- 予定が1件でも schedules 配列で返す
+- 予定が見つからない場合も schedules は空配列ではなく、できるだけ1件推定して返す
 - 予定名は自然な日本語にする
 - 種類は 面接 / シフト / 授業 / 予定 のどれか
 - 時間が1つしか分からない場合は startTime のみに入れる
@@ -110,23 +125,20 @@ ${text}
     try {
       parsed = JSON.parse(raw);
     } catch {
+      console.error("AI raw output was not valid JSON:");
+      console.error(raw);
       return res.status(500).json({
         error: "AI response was not valid JSON",
         raw,
       });
     }
 
-    const result = {
-      title: parsed.title || "予定",
-      date: normalizeDateToSlash(parsed.date || "未設定"),
-      time: normalizeTimeRange(parsed.startTime, parsed.endTime),
-      location: parsed.location || "未設定",
-      type: parsed.type || "予定",
-      reason: parsed.reason || "",
-      rawText: text,
-    };
+    const schedules = Array.isArray(parsed?.schedules) ? parsed.schedules : [];
+    const normalized = schedules.map((item) => normalizeSchedule(item, text));
 
-    return res.json(result);
+    return res.json({
+      schedules: normalized,
+    });
   } catch (error) {
     console.error("parse-schedule error:", error);
     return res.status(500).json({
